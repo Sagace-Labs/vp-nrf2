@@ -1,0 +1,58 @@
+cff-version: 1.2.0
+title: "vp-nrf2: NRF2/KEAP1 antioxidant-response activation prediction"
+message: "If you use this package, please cite it and the underlying Tox21 data."
+type: software
+authors:
+  - name: "Sagace Labs"
+repository-code: "https://github.com/Sagace-Labs/vp-nrf2"
+license: Apache-2.0
+version: "1.0.0"
+abstract: >-
+  A predictor of NRF2/KEAP1 antioxidant-response activation and of the
+  cell-viability loss it is confounded with, from molecular structure.
+keywords:
+  - cheminformatics
+  - drug-induced liver injury
+  - oxidative stress
+  - NRF2
+  - Tox21
+references:
+  - type: article
+    title: >-
+      Profiling environmental chemicals for activity in the antioxidant response
+      element signaling pathway using a high throughput screening approach
+    authors:
+      - family-names: Shukla
+        given-names: Sunita J.
+    journal: "Environmental Health Perspectives"
+    year: 2012
+    volume: 120
+    issue: 8
+    start: 1150
+    end: 1156
+    doi: "10.1289/ehp.1104709"
+  - type: article
+    title: >-
+      Improving the human hazard characterization of chemicals: a Tox21 update
+    authors:
+      - family-names: Tice
+        given-names: Raymond R.
+    journal: "Environmental Health Perspectives"
+    year: 2013
+    volume: 121
+    issue: 7
+    start: 756
+    end: 765
+    doi: "10.1289/ehp.1205784"
+  - type: article
+    title: "PubChem 2025 update"
+    authors:
+      - family-names: Kim
+        given-names: Sunghwan
+    journal: "Nucleic Acids Research"
+    year: 2025
+    volume: 53
+    issue: D1
+    start: D1516
+    end: D1525
+    doi: "10.1093/nar/gkae1059"

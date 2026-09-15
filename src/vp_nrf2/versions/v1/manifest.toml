@@ -1,0 +1,54 @@
+schema = 1
+pathway = "nrf2"
+version = "v1"
+released = "2026-09-06"
+reason = "first release: binary XGBoost on Morgan, MACCS and RDKit descriptors over the Tox21 antioxidant-response screen"
+
+[signature]
+version = 1
+inputs = ["smiles"]
+
+[[signature.outputs]]
+name = "nrf2_are"
+dtype = "float32"
+range = [0.0, 1.0]
+semantics = "P(activates the antioxidant response element reporter in the Tox21 qHTS screen). The reporter registers indirect activators alongside direct electrophiles"
+missing = "NaN when RDKit cannot parse the input SMILES"
+
+[[signature.outputs]]
+name = "nrf2_cytotox"
+dtype = "float32"
+range = [0.0, 1.0]
+semantics = "P(reduces viability in the counter-screen over the same library). A compound scoring high on both readouts raised the reporter in a cell that was also dying"
+missing = "NaN when RDKit cannot parse the input SMILES"
+
+[dataset]
+name = "Tox21 antioxidant response element qHTS"
+source = "PubChem BioAssay AID 743202 (qHTS assay for small molecule agonists of the antioxidant response element (ARE) signaling pathway) and AID 743203 (qHTS assay for small molecule agonists of the antioxidant response element (ARE) signaling pathway - cell viability counter screen), rows called Active or Inactive, one row per compound labelled by majority call across its assay records"
+url = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/assay/aid/743202/concise/CSV"
+retrieved = "2026-09-06"
+licence = "public-domain"
+redistributable = true
+path = "data/nrf2_tox21.parquet"
+labels = ["label", "cytotox"]
+sha256 = "9d966167f286084d260da7664519eec2890dd6da04e4c32fec208a476d9dba35"
+n_rows = 4540
+base_rate = 0.093172
+fetch = "python -m vp_nrf2.data fetch --verify"
+
+[model]
+family = "xgboost-binary"
+features = "combo3"
+fit = "one model per output, each on every compound its endpoint labels minus a 10% scaffold carve used for early stopping"
+weights = "weights.joblib"
+sha256 = "eac90afe63d4bbe5a4a7f80de5e0996a515ed090f36c3b9ded3a4b6ae5eac56f"
+
+[protocol]
+id = "scaffold-balanced-5seed@1"
+provider = "vp-core"
+core_version = "1.3.0"
+
+[provenance]
+python = "3.11.11"
+rdkit = "2026.03.5"
+xgboost = "3.2.0"
