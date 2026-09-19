@@ -1,6 +1,6 @@
 [project]
 name = "vp-nrf2"
-version = "1.0.0"
+version = "1.1.0"
 description = "NRF2/KEAP1 antioxidant-response activation and cell-viability loss predicted from a SMILES string — a molecular initiating event for drug-induced liver injury."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"

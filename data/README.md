@@ -1,9 +1,11 @@
 # NRF2 data
 
     data/
-      nrf2_tox21.parquet           standardised table (producing the hash)
+      nrf2_tox21.parquet                    standardised table (producing the hash)
+      nrf2_viability_pool.parquet           further viability screens, training only
       example/
-        nrf2_example.parquet       small stratified fixture, used by the tests
+        nrf2_example.parquet                small stratified fixture, used by the tests
+        nrf2_viability_pool_example.parquet the same for the pool
 
 `nrf2_tox21.parquet` holds one row per compound with the two identity columns —
 `inchikey` and `smiles` (standardised) — and two label columns. `label` is the
@@ -31,6 +33,13 @@ to avoid featurization outputting all-zeros.
 The reporter screen decides which compounds the table holds. A compound the
 counter-screen did not call carries a null in `cytotox`, which records that no
 call was made.
+
+`nrf2_viability_pool.parquet` holds the viability counter-screens of five
+further Tox21 screens — AIDs 743086, 720693, 743209, 651633 and 1346977 —
+processed the same way, one call column per screen and a null where that
+screen made no call. It supplies extra training rows for `nrf2_cytotox` and is
+never evaluated against; the endpoint remains AID 743203's call. It carries
+its own hash in the manifest under `[[dataset.auxiliary]]`.
 
 `potency_um` is the median of the potencies reported across a compound's
 reporter records and is NaN when none reported one. `n_calls` is how many assay

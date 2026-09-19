@@ -29,15 +29,23 @@ from vp_core import fingerprints
 from vp_nrf2 import contract as nrf2_contract
 from vp_nrf2 import data as nrf2_data
 from vp_nrf2 import model as nrf2_model
-from vp_nrf2.train import OUTPUT_LABELS
+from vp_nrf2.train import OUTPUT_LABELS, POOLED_OUTPUTS, pool_rows
 
 __all__ = ["evaluate_version", "main"]
 
 
-def _score_output(X, table, column, smiles, protocol) -> tuple[dict, list[dict]]:
-    """Per-seed metrics for one endpoint, on the folds its compounds fall in."""
-    from vp_core import metrics as metrics_mod
+def _score_output(
+    X, table, column, smiles, protocol, *, pool=None, features=None
+) -> tuple[dict, list[dict]]:
+    """Per-seed metrics for one endpoint, on the folds its compounds fall in.
 
+    When ``pool`` is given, its rows join the training fold, blocked by Murcko
+    scaffold against the validation and test folds of that seed.
+    """
+    from vp_core import metrics as metrics_mod
+    from vp_core.splits import murcko_scaffold
+
+    scaffolds = np.array([murcko_scaffold(s) for s in smiles], dtype=object)
     rows = nrf2_data.labelled(table, column)
     keep = set(rows.tolist())
     y = table[column].to_numpy()
@@ -55,9 +63,18 @@ def _score_output(X, table, column, smiles, protocol) -> tuple[dict, list[dict]]
                 "cannot be measured under this protocol"
             )
 
-        fitted = nrf2_model.fit(
-            X[train], y[train].astype(int), X[val], y[val].astype(int), seed=seed
-        )
+        X_train, y_train = X[train], y[train].astype(int)
+        n_extra = 0
+        if pool is not None:
+            blocked = set(scaffolds[val].tolist()) | set(scaffolds[test].tolist())
+            blocked.discard("")
+            extra_X, extra_y = pool_rows(pool, features, blocked=blocked)
+            n_extra = len(extra_y)
+            if n_extra:
+                X_train = np.vstack([X_train, extra_X])
+                y_train = np.concatenate([y_train, extra_y])
+
+        fitted = nrf2_model.fit(X_train, y_train, X[val], y[val].astype(int), seed=seed)
         from vp_core import xgb
 
         proba = xgb.predict_proba(fitted, X[test])
@@ -111,10 +128,30 @@ def evaluate_version(
 
     table = nrf2_data.example() if use_example else nrf2_data.load()
     smiles = table["smiles"].tolist()
-    X = fingerprints.featurize(smiles, nrf2_model.FEATURES)
+    matrices: dict[str, np.ndarray] = {}
+
+    def matrix(kind: str) -> np.ndarray:
+        if kind not in matrices:
+            matrices[kind] = fingerprints.featurize(smiles, kind)
+        return matrices[kind]
+
+    pooled = set(POOLED_OUTPUTS) & set(resolved.output_names)
+    if pooled and not resolved.manifest.get("dataset", {}).get("auxiliary"):
+        pooled = set()
+    pool = None
+    if pooled:
+        pool = nrf2_data.example_pool() if use_example else nrf2_data.load_pool()
 
     scored = {
-        output: _score_output(X, table, OUTPUT_LABELS[output], smiles, protocol)[0]
+        output: _score_output(
+            matrix(resolved.features_for(output)),
+            table,
+            OUTPUT_LABELS[output],
+            smiles,
+            protocol,
+            pool=pool if output in pooled else None,
+            features=resolved.features_for(output),
+        )[0]
         for output in resolved.output_names
     }
     primary = scored[nrf2_contract.PRIMARY]

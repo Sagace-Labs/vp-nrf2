@@ -32,18 +32,23 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from vp_nrf2.target import CYTOTOX, TARGET
+from vp_nrf2.target import CYTOTOX, TARGET, VIABILITY_POOL
 
 __all__ = [
     "DATA_DIR",
     "EXAMPLE_PATH",
     "LABELS",
+    "POOL_EXAMPLE_PATH",
+    "POOL_LABELS",
+    "POOL_PATH",
     "TABLE_PATH",
     "build_example",
     "example",
+    "example_pool",
     "fetch",
     "labelled",
     "load",
+    "load_pool",
     "verify",
 ]
 
@@ -54,6 +59,12 @@ EXAMPLE_PATH = DATA_DIR / "example" / "nrf2_example.parquet"
 
 #: The label columns the table carries, primary endpoint first.
 LABELS: tuple[str, ...] = ("label", "cytotox")
+
+POOL_PATH = DATA_DIR / "nrf2_viability_pool.parquet"
+POOL_EXAMPLE_PATH = DATA_DIR / "example" / "nrf2_viability_pool_example.parquet"
+
+#: One call column per further viability screen, in ``VIABILITY_POOL`` order.
+POOL_LABELS: tuple[str, ...] = tuple(f"y_{e.name.lower()}" for e in VIABILITY_POOL)
 
 PUG_BASE = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
 _MIN_INTERVAL = 0.25  # PubChem asks for no more than five requests a second
@@ -90,6 +101,24 @@ def example() -> pd.DataFrame:
     return dataset.read_table(EXAMPLE_PATH, labels=LABELS)
 
 
+def load_pool() -> pd.DataFrame:
+    """The further viability screens. Raises with guidance when absent."""
+    from vp_core import dataset
+
+    if not POOL_PATH.exists():
+        raise FileNotFoundError(_missing(POOL_PATH))
+    return dataset.read_table(POOL_PATH, labels=POOL_LABELS)
+
+
+def example_pool() -> pd.DataFrame:
+    """The committed fixture for the further viability screens."""
+    from vp_core import dataset
+
+    if not POOL_EXAMPLE_PATH.exists():
+        raise FileNotFoundError(_missing(POOL_EXAMPLE_PATH))
+    return dataset.read_table(POOL_EXAMPLE_PATH, labels=POOL_LABELS)
+
+
 def labelled(table: pd.DataFrame, column: str) -> np.ndarray:
     """Row positions where ``column`` carries a call."""
     return np.flatnonzero(table[column].notna().to_numpy())
@@ -100,13 +129,25 @@ def labelled(table: pd.DataFrame, column: str) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def _assay_records(aid: int) -> pd.DataFrame:
-    """The BioAssay table for one AID."""
+def _get(url: str, *, timeout: int, session=None):
+    """GET with backoff. PubChem answers 503 when a rebuild asks too fast."""
     import requests
 
-    url = f"{PUG_BASE}/assay/aid/{aid}/concise/CSV"
-    response = requests.get(url, headers={"Accept": "text/csv"}, timeout=300)
-    response.raise_for_status()
+    getter = session.get if session is not None else requests.get
+    delay = 1.0
+    for attempt in range(6):
+        response = getter(url, headers={"Accept": "text/csv"}, timeout=timeout)
+        if response.status_code not in (429, 503) or attempt == 5:
+            response.raise_for_status()
+            return response
+        time.sleep(delay)
+        delay *= 2
+    raise RuntimeError("unreachable")
+
+
+def _assay_records(aid: int) -> pd.DataFrame:
+    """The BioAssay table for one AID."""
+    response = _get(f"{PUG_BASE}/assay/aid/{aid}/concise/CSV", timeout=300)
     raw = pd.read_csv(io.BytesIO(response.content), dtype=str, low_memory=False)
 
     for column in ("CID", "Activity Outcome"):
@@ -144,8 +185,7 @@ def _smiles_for(cids: list[int]) -> pd.DataFrame:
         batch = unique[start : start + _CID_BATCH]
         ids = ",".join(str(c) for c in batch)
         url = f"{PUG_BASE}/compound/cid/{ids}/property/SMILES,ConnectivitySMILES/CSV"
-        response = session.get(url, headers={"Accept": "text/csv"}, timeout=120)
-        response.raise_for_status()
+        response = _get(url, timeout=120, session=session)
         page = pd.read_csv(io.BytesIO(response.content))
         primary = "SMILES" if "SMILES" in page.columns else "IsomericSMILES"
         fallback = (
@@ -244,6 +284,43 @@ def _counter_screen(records: pd.DataFrame, structures: pd.DataFrame) -> pd.DataF
     return pd.DataFrame(rows)
 
 
+def _pool_table(records: dict, structures: pd.DataFrame) -> pd.DataFrame:
+    """One row per compound, one call column per further viability screen."""
+    from vp_core import dataset
+
+    merged: pd.DataFrame | None = None
+    smiles: dict[str, str] = {}
+    for endpoint, frame in records.items():
+        standardised = _standardise(frame, structures)
+        smiles.update(
+            dict(zip(standardised["inchikey"], standardised["smiles"], strict=True))
+        )
+        grouped = standardised.groupby("inchikey")["active"].mean()
+        # The same rule the primary table uses: majority call, a tie dropped.
+        called = grouped[grouped != 0.5]
+        column = pd.DataFrame(
+            {
+                "inchikey": called.index,
+                f"y_{endpoint.name.lower()}": (called > 0.5).astype(int).to_numpy(),
+            }
+        )
+        merged = column if merged is None else merged.merge(column, on="inchikey", how="outer")
+
+    if merged is None:
+        raise RuntimeError("no viability screens returned any record")
+    merged["smiles"] = merged["inchikey"].map(smiles)
+    merged = merged.dropna(subset=["smiles"])
+    for name in POOL_LABELS:
+        merged[name] = merged[name].astype("Int64")
+    ordered = ["inchikey", "smiles", *POOL_LABELS]
+    table = merged[ordered].sort_values("inchikey").reset_index(drop=True)
+
+    problems = dataset.validate_table(table, labels=POOL_LABELS)
+    if problems:
+        raise ValueError(f"rebuilt viability pool is invalid: {'; '.join(problems)}")
+    return table
+
+
 def fetch(*, write: bool = True) -> pd.DataFrame:
     """Rebuild the dataset from PubChem. Returns the standardised table."""
     from vp_core import dataset
@@ -253,7 +330,18 @@ def fetch(*, write: bool = True) -> pd.DataFrame:
     print(f"fetching AID {CYTOTOX.pubchem_aid} from PubChem", file=sys.stderr)
     counter = _assay_records(CYTOTOX.pubchem_aid)
 
-    cids = sorted(set(primary["cid"]) | set(counter["cid"]))
+    pool_records = {}
+    for endpoint in VIABILITY_POOL:
+        print(f"fetching AID {endpoint.pubchem_aid} from PubChem", file=sys.stderr)
+        pool_records[endpoint] = _assay_records(endpoint.pubchem_aid)
+
+    # One structure resolution for every assay, so the SMILES behind a
+    # compound is the same string wherever it appears.
+    cids = sorted(
+        set(primary["cid"])
+        | set(counter["cid"])
+        | {c for frame in pool_records.values() for c in frame["cid"]}
+    )
     structures = _smiles_for(cids)
 
     table = _to_compounds(primary, structures)
@@ -267,6 +355,15 @@ def fetch(*, write: bool = True) -> pd.DataFrame:
         raise ValueError(f"rebuilt table is invalid: {'; '.join(problems)}")
     if write:
         dataset.write_table(table, TABLE_PATH, labels=LABELS)
+
+    pool = _pool_table(pool_records, structures)
+    if write:
+        dataset.write_table(pool, POOL_PATH, labels=POOL_LABELS)
+    print(
+        f"viability pool: {len(pool)} compounds over {len(POOL_LABELS)} screens\n"
+        f"  sha256 {dataset.dataset_hash(pool, labels=POOL_LABELS)}",
+        file=sys.stderr,
+    )
 
     called = table["cytotox"].notna()
     print(
@@ -290,13 +387,31 @@ def verify(version: str | None = None) -> dict:
     labels = manifest_mod.dataset_labels(resolved.manifest)
     declared = resolved.manifest.get("dataset", {}).get("sha256")
     actual = dataset.dataset_hash(load(), labels=labels)
-    return {
+    out = {
         "version": resolved.name,
         "labels": labels,
         "declared": declared,
         "actual": actual,
         "match": declared == actual,
     }
+
+    auxiliary = []
+    for entry in resolved.manifest.get("dataset", {}).get("auxiliary", []):
+        entry_labels = list(entry.get("labels", POOL_LABELS))
+        found = dataset.dataset_hash(load_pool(), labels=entry_labels)
+        auxiliary.append(
+            {
+                "name": entry.get("name"),
+                "labels": entry_labels,
+                "declared": entry.get("sha256"),
+                "actual": found,
+                "match": entry.get("sha256") == found,
+            }
+        )
+    if auxiliary:
+        out["auxiliary"] = auxiliary
+        out["match"] = out["match"] and all(a["match"] for a in auxiliary)
+    return out
 
 
 def build_example(n: int = 200, seed: int = 0) -> pd.DataFrame:
@@ -305,6 +420,19 @@ def build_example(n: int = 200, seed: int = 0) -> pd.DataFrame:
 
     sample = dataset.stratified_example(load(), n=n, seed=seed, labels=LABELS)
     dataset.write_table(sample, EXAMPLE_PATH, labels=LABELS)
+
+    # The fixture for the pool holds the same compounds the primary fixture
+    # holds, so a test fitting the pooled head runs offline on both.
+    pool = load_pool()
+    held = list(sample["inchikey"])
+    keep = pool[pool["inchikey"].isin(held)]
+    extra = pool[~pool["inchikey"].isin(held)].head(len(sample))
+    subset = (
+        pd.concat([keep, extra], ignore_index=True)
+        .sort_values("inchikey")
+        .reset_index(drop=True)
+    )
+    dataset.write_table(subset, POOL_EXAMPLE_PATH, labels=POOL_LABELS)
     return sample
 
 

@@ -11,9 +11,18 @@ import numpy as np
 
 from vp_core import fingerprints, xgb
 
-__all__ = ["FEATURES", "HYPERPARAMS", "fit", "predict"]
+__all__ = ["FEATURES", "FEATURES_BY_OUTPUT", "HYPERPARAMS", "features_for", "fit", "predict"]
 
 FEATURES = "combo3"
+
+#: Outputs fit with a featuriser other than ``FEATURES``.
+FEATURES_BY_OUTPUT: dict[str, str] = {}
+
+
+def features_for(output: str) -> str:
+    """The featuriser ``output`` is fit with."""
+    return FEATURES_BY_OUTPUT.get(output, FEATURES)
+
 
 HYPERPARAMS: dict[str, Any] = {
     "n_estimators": 2000,
@@ -41,6 +50,7 @@ def fit(X_train, y_train, X_val, y_val, *, seed: int = 0) -> Any:
     )
 
 
-def predict(model: Any, smiles: list[str]) -> np.ndarray:
+def predict(model: Any, smiles: list[str], *, output: str | None = None) -> np.ndarray:
     """Positive-class probability for arbitrary SMILES."""
-    return xgb.predict_proba(model, fingerprints.featurize(smiles, FEATURES))
+    kind = FEATURES if output is None else features_for(output)
+    return xgb.predict_proba(model, fingerprints.featurize(smiles, kind))

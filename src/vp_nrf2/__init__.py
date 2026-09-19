@@ -21,7 +21,7 @@ from vp_core.registry import Version, VersionedPathway
 from vp_nrf2.target import CYTOTOX, TARGET, TARGETS, Endpoint, all_names
 from vp_nrf2.target import get as get_target
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 PATHWAY = "nrf2"
 VERSIONS_DIR = Path(__file__).resolve().parent / "versions"
@@ -34,10 +34,14 @@ def _predict_values(model: Any, smiles: list[str], version: Version) -> np.ndarr
     from vp_core import fingerprints, xgb
 
     RDLogger.DisableLog("rdApp.*")
-    X = fingerprints.featurize(smiles, str(version.features))
-    values = np.column_stack(
-        [xgb.predict_proba(model[name], X) for name in version.output_names]
-    )
+    matrices: dict[str, np.ndarray] = {}
+    columns = []
+    for name in version.output_names:
+        kind = version.features_for(name)
+        if kind not in matrices:
+            matrices[kind] = fingerprints.featurize(smiles, kind)
+        columns.append(xgb.predict_proba(model[name], matrices[kind]))
+    values = np.column_stack(columns)
 
     # An unparseable input is a declared NaN, not an error.
     unparseable = [Chem.MolFromSmiles(s) is None for s in smiles]

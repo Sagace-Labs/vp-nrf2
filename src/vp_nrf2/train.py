@@ -18,23 +18,53 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import numpy as np
+
 from vp_core import fingerprints
 from vp_nrf2 import contract as nrf2_contract
 from vp_nrf2 import data as nrf2_data
 from vp_nrf2 import model as nrf2_model
-from vp_nrf2.target import CYTOTOX, TARGET
+from vp_nrf2.target import CYTOTOX, TARGET, VIABILITY_POOL
 
-__all__ = ["build_version", "main"]
+__all__ = ["build_version", "main", "pool_rows"]
 
 VERSIONS_DIR = Path(__file__).resolve().parent / "versions"
 
-DEFAULT_PROTOCOL = "scaffold-shuffle-5seed@1"
+DEFAULT_PROTOCOL = "scaffold-balanced-5seed@1"
 
 #: Which label column supplies each declared output.
 OUTPUT_LABELS: dict[str, str] = {
     "nrf2_are": "label",
     "nrf2_cytotox": "cytotox",
 }
+
+#: Outputs that also train on the further viability screens in
+#: ``nrf2_data.load_pool()``. Their label is unchanged; only the training rows
+#: grow, and donor rows are blocked by Murcko scaffold against the fold that
+#: judges the fit.
+POOLED_OUTPUTS: tuple[str, ...] = ("nrf2_cytotox",)
+
+
+def pool_rows(pool, features: str, *, blocked: set[str]):
+    """Donor rows and their calls, one row per compound per screen that called it."""
+    from vp_core.splits import murcko_scaffold
+
+    pool_smiles = pool["smiles"].tolist()
+    scaffolds = [murcko_scaffold(s) for s in pool_smiles]
+    free = np.flatnonzero([s not in blocked for s in scaffolds])
+    X = fingerprints.featurize(pool_smiles, features)
+
+    blocks_X, blocks_y = [], []
+    for column in nrf2_data.POOL_LABELS:
+        values = pool[column].to_numpy(dtype="float64", na_value=np.nan)
+        rows = free[np.isfinite(values[free])]
+        if not len(rows):
+            continue
+        blocks_X.append(X[rows])
+        blocks_y.append(values[rows].astype(int))
+    if not blocks_X:
+        return np.empty((0, X.shape[1]), dtype=np.float32), np.empty(0, dtype=int)
+    return np.vstack(blocks_X), np.concatenate(blocks_y)
 
 
 def _provenance() -> dict:
@@ -59,7 +89,7 @@ def build_version(
 ) -> Path:
     """Fit the deployment models and write the version directory."""
     from vp_core import protocols
-    from vp_core.splits import scaffold_train_val
+    from vp_core.splits import murcko_scaffold, scaffold_train_val
 
     protocols.get(protocol)  # fail early on an unknown protocol
 
@@ -72,10 +102,18 @@ def build_version(
 
     table = nrf2_data.load()
     smiles = table["smiles"].tolist()
-    X = fingerprints.featurize(smiles, nrf2_model.FEATURES)
+    matrices: dict[str, np.ndarray] = {}
+
+    def matrix(kind: str) -> np.ndarray:
+        if kind not in matrices:
+            matrices[kind] = fingerprints.featurize(smiles, kind)
+        return matrices[kind]
+
+    pool = nrf2_data.load_pool() if POOLED_OUTPUTS else None
 
     fitted = {}
     for output in nrf2_contract.column_names():
+        X = matrix(nrf2_model.features_for(output))
         column = OUTPUT_LABELS[output]
         rows = nrf2_data.labelled(table, column)
         y = table[column].to_numpy()[rows].astype(int)
@@ -84,9 +122,21 @@ def build_version(
         # Deployment fit: everything this endpoint labels, with a small scaffold
         # carve that stops boosting before it overfits.
         train_idx, val_idx = scaffold_train_val(subset, val_frac=0.10, seed=seed)
+        X_train, y_train = X[rows][train_idx], y[train_idx]
+
+        if output in POOLED_OUTPUTS and pool is not None:
+            extra_X, extra_y = pool_rows(
+                pool,
+                nrf2_model.features_for(output),
+                blocked={murcko_scaffold(subset[i]) for i in val_idx} - {""},
+            )
+            X_train = np.vstack([X_train, extra_X])
+            y_train = np.concatenate([y_train, extra_y])
+            print(f"  {output}: {len(extra_y)} further viability rows", file=sys.stderr)
+
         fitted[output] = nrf2_model.fit(
-            X[rows][train_idx],
-            y[train_idx],
+            X_train,
+            y_train,
             X[rows][val_idx],
             y[val_idx],
             seed=seed,
@@ -169,6 +219,12 @@ def _write_version(
             "fit": (
                 "one model per output, each on every compound its endpoint labels "
                 "minus a 10% scaffold carve used for early stopping"
+                + (
+                    f"; {', '.join(POOLED_OUTPUTS)} also trains on the further "
+                    "viability screens, scaffold-blocked against that carve"
+                    if POOLED_OUTPUTS
+                    else ""
+                )
             ),
             "weights": "weights.joblib",
             "sha256": hashing.sha256_file(weights_path),
@@ -180,6 +236,38 @@ def _write_version(
         },
         "provenance": _provenance(),
     }
+
+    if POOLED_OUTPUTS:
+        pool_table = nrf2_data.load_pool()
+        pool_labels = list(nrf2_data.POOL_LABELS)
+        record["dataset"]["auxiliary"] = [
+            {
+                "name": "Tox21 viability counter-screens",
+                "role": "training-only",
+                "source": (
+                    "PubChem BioAssay "
+                    + ", ".join(
+                        f"AID {e.pubchem_aid} ({e.assay_name})" for e in VIABILITY_POOL
+                    )
+                    + ", rows called Active or Inactive, one row per compound "
+                    "labelled by majority call across its assay records"
+                ),
+                "retrieved": "2026-09-06",
+                "licence": "public-domain",
+                "redistributable": True,
+                "path": "data/nrf2_viability_pool.parquet",
+                "labels": pool_labels,
+                "sha256": dataset.dataset_hash(pool_table, labels=pool_labels),
+                "n_rows": len(pool_table),
+                "fetch": "python -m vp_nrf2.data fetch --verify",
+            }
+        ]
+
+    if nrf2_model.FEATURES_BY_OUTPUT:
+        record["model"]["features_by_output"] = [
+            {"output": name, "kind": kind}
+            for name, kind in nrf2_model.FEATURES_BY_OUTPUT.items()
+        ]
 
     problems = manifest.validate(record, version_dir=directory)
     if problems:

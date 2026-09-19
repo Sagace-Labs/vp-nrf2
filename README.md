@@ -25,9 +25,9 @@ available with `versions()`.
 
 ## Current version
 
-**v1**, signature 1, measured under protocol `scaffold-balanced-5seed@1`. The
+**v2**, signature 1, measured under protocol `scaffold-balanced-5seed@1`. The
 full record — metrics per output and per seed, dataset hash, environment — is in
-[`src/vp_nrf2/versions/v1/CARD.md`](src/vp_nrf2/versions/v1/CARD.md).
+[`src/vp_nrf2/versions/v2/CARD.md`](src/vp_nrf2/versions/v2/CARD.md).
 
 ## Data
 
@@ -36,9 +36,10 @@ antioxidant response element signalling pathway, and AID 743203, its
 cell-viability counter-screen over the same library. Both are reduced to one row
 per compound labelled by the majority call across its assay records, retrieved
 2026-09-06 and redistributed here as a United States government work in the
-public domain. Rebuild and check for upstream drift with
-`python -m vp_nrf2.data fetch --verify`; see [`data/README.md`](data/README.md)
-for the expected layout.
+public domain. `nrf2_cytotox` also trains on five further Tox21 viability
+counter-screens, fetched and pinned the same way. Rebuild and check for
+upstream drift with `python -m vp_nrf2.data fetch --verify`; see
+[`data/README.md`](data/README.md) for the expected layout.
 
 ## Retrain
 
