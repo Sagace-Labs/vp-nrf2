@@ -4,6 +4,16 @@ Released versions are immutable. A correction to a released version is a new
 patch version. This file records *why* each version exists; what
 it contains is in its own `manifest.toml` and `CARD.md`.
 
+## v3
+
+EPA invitrodb v4.3 ARE calls add reporter training compounds absent
+from the primary screen. Five assay-token members are averaged and calibrated
+on validation folds; the token is zero at inference. The original reporter
+labels, viability recipe, and signature 1 remain unchanged.
+
+The candidate was chosen on the same five scaffold folds used for evaluation.
+Its measured gain is exploratory pending an untouched cohort.
+
 ## v2
 
 `nrf2_cytotox` trains on the panel's five other Tox21 viability

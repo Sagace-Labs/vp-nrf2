@@ -1,8 +1,9 @@
-Data licence — data/nrf2_tox21.parquet
+Data licence — bundled NRF2 tables
 ======================================
 
-This file applies ONLY to the bundled dataset at `data/nrf2_tox21.parquet` and
-its derived fixture at `data/example/nrf2_example.parquet`. The source code and
+This file applies ONLY to the bundled tables at `data/nrf2_tox21.parquet`,
+`data/nrf2_viability_pool.parquet`, and `data/nrf2_epa_aeid1110.parquet`, and
+their derived fixtures. The source code and
 the trained weights in `src/vp_nrf2/` are licensed separately under Apache-2.0;
 see LICENSE.
 
@@ -17,6 +18,14 @@ concise assay endpoint:
   AID 743203 — the same assay's cell viability counter screen, over the same
                library
 
+The viability pool also uses PubChem AIDs 743086, 720693, 743209, 651633 and
+1346977. The additional ARE training table comes from the United States EPA
+invitrodb v4.3 AEID 1110 PubChem export of 18 August 2026 and its archived
+2018 ToxCast chemical identity SDF:
+
+  https://clowder.edap-cluster.com/api/files/6a85a260e4b0731a36bd04cc
+  https://clowder.edap-cluster.com/api/files/6114f600e4b0856fdc65865c
+
 Derivation
 ----------
 Rows each assay called Active or Inactive were kept and rows it called
@@ -27,17 +36,23 @@ per InChIKey by majority call, with ties dropped. Only the InChIKey,
 standardised SMILES, the two binary labels, median reported potency and record
 counts are retained.
 
+For the EPA table, only Active and Inactive calls with resolved structures are
+kept. Replicate calls are collapsed by majority, ties are dropped, and primary
+screen identities and conflicting stereo duplicates are removed.
+
 Licence
 -------
-Tox21 assay data deposited in PubChem is produced by United States federal
-agencies in the course of their official duties. Such works are not subject to
-copyright protection in the United States (17 U.S.C. Section 105) and are
-therefore in the public domain. PubChem states that it places no restrictions
-on the use or distribution of the data it hosts:
+The Tox21 assay data deposited in PubChem are public domain. PubChem states
+that it places no restrictions on the use or distribution of the data it hosts:
 
     https://www.ncbi.nlm.nih.gov/home/about/policies/
 
-No licence conditions attach to this dataset or to adaptations of it.
+EPA states that its computational toxicology downloads, including ToxCast,
+are free of copyright restrictions for commercial and non-commercial use:
+
+    https://www.epa.gov/comptox-tools/downloadable-computational-toxicology-data
+
+No licence conditions attach to these tables or their adaptations.
 Attribution below is requested as scholarly practice, not as a licence term.
 
 Attribution

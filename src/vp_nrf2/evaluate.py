@@ -1,6 +1,6 @@
 """Measure a version under an evaluation protocol.
 
-    python -m vp_nrf2.evaluate --version v2
+    python -m vp_nrf2.evaluate --version v3
 
 Writes ``versions/<version>/metrics.json`` and regenerates ``CARD.md``. The
 protocol named in the version's manifest supplies the split, the fold sizes,
@@ -26,6 +26,7 @@ from datetime import date
 import numpy as np
 
 from vp_core import fingerprints
+from vp_nrf2 import are_ensemble
 from vp_nrf2 import contract as nrf2_contract
 from vp_nrf2 import data as nrf2_data
 from vp_nrf2 import model as nrf2_model
@@ -35,7 +36,7 @@ __all__ = ["evaluate_version", "main"]
 
 
 def _score_output(
-    X, table, column, smiles, protocol, *, pool=None, features=None
+    X, table, column, smiles, protocol, *, pool=None, features=None, epa_source=None
 ) -> tuple[dict, list[dict]]:
     """Per-seed metrics for one endpoint, on the folds its compounds fall in.
 
@@ -62,6 +63,20 @@ def _score_output(
                 f"seed {seed} leaves {column!r} with an empty fold — this endpoint "
                 "cannot be measured under this protocol"
             )
+
+        if epa_source is not None:
+            blocked = set(scaffolds[np.concatenate([val, test])].tolist())
+            fitted, n_extra = are_ensemble.fit_are(
+                X, y.astype(int), train, val, blocked, epa_source, seed=seed
+            )
+            proba = are_ensemble.predict_are(fitted, X[test])
+            scored = metrics_mod.binary_metrics(y[test].astype(int), proba)
+            per_seed.append(scored)
+            folds.append({"seed": int(seed), "train": len(train), "val": len(val),
+                          "test": len(test), "external_train": n_extra})
+            print(f"  {column} seed {seed}: test AUC {scored['auc_roc']:.4f} "
+                  f"(n_test={len(test)}, n_external={n_extra})", file=sys.stderr)
+            continue
 
         X_train, y_train = X[train], y[train].astype(int)
         n_extra = 0
@@ -141,6 +156,12 @@ def evaluate_version(
     pool = None
     if pooled:
         pool = nrf2_data.example_pool() if use_example else nrf2_data.load_pool()
+    epa_source = None
+    if resolved.manifest["model"]["family"] == "xgboost-binary-ensemble":
+        source_table = nrf2_data.example_epa() if use_example else nrf2_data.load_epa()
+        epa_source = are_ensemble.source_features(
+            are_ensemble.external_only(source_table, table)
+        )
 
     scored = {
         output: _score_output(
@@ -151,6 +172,7 @@ def evaluate_version(
             protocol,
             pool=pool if output in pooled else None,
             features=resolved.features_for(output),
+            epa_source=epa_source if output == "nrf2_are" else None,
         )[0]
         for output in resolved.output_names
     }

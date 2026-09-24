@@ -44,10 +44,12 @@ __all__ = [
     "TABLE_PATH",
     "build_example",
     "example",
+    "example_epa",
     "example_pool",
     "fetch",
     "labelled",
     "load",
+    "load_epa",
     "load_pool",
     "verify",
 ]
@@ -62,6 +64,8 @@ LABELS: tuple[str, ...] = ("label", "cytotox")
 
 POOL_PATH = DATA_DIR / "nrf2_viability_pool.parquet"
 POOL_EXAMPLE_PATH = DATA_DIR / "example" / "nrf2_viability_pool_example.parquet"
+EPA_PATH = DATA_DIR / "nrf2_epa_aeid1110.parquet"
+EPA_EXAMPLE_PATH = DATA_DIR / "example" / "nrf2_epa_example.parquet"
 
 #: One call column per further viability screen, in ``VIABILITY_POOL`` order.
 POOL_LABELS: tuple[str, ...] = tuple(f"y_{e.name.lower()}" for e in VIABILITY_POOL)
@@ -108,6 +112,28 @@ def load_pool() -> pd.DataFrame:
     if not POOL_PATH.exists():
         raise FileNotFoundError(_missing(POOL_PATH))
     return dataset.read_table(POOL_PATH, labels=POOL_LABELS)
+
+
+def load_epa() -> pd.DataFrame:
+    """EPA v4.3 ARE calls used only to augment reporter training."""
+    from vp_core import dataset
+
+    if not EPA_PATH.exists():
+        raise FileNotFoundError(
+            f"{EPA_PATH} is not present; run `python -m vp_nrf2.data fetch-epa`."
+        )
+    return dataset.read_table(EPA_PATH, labels=("label",))
+
+
+def example_epa() -> pd.DataFrame:
+    """A small stratified EPA fixture for the evaluation smoke run."""
+    from vp_core import dataset
+
+    if not EPA_EXAMPLE_PATH.exists():
+        raise FileNotFoundError(
+            f"{EPA_EXAMPLE_PATH} is not present; run `python -m vp_nrf2.data build-example`."
+        )
+    return dataset.read_table(EPA_EXAMPLE_PATH, labels=("label",))
 
 
 def example_pool() -> pd.DataFrame:
@@ -398,7 +424,14 @@ def verify(version: str | None = None) -> dict:
     auxiliary = []
     for entry in resolved.manifest.get("dataset", {}).get("auxiliary", []):
         entry_labels = list(entry.get("labels", POOL_LABELS))
-        found = dataset.dataset_hash(load_pool(), labels=entry_labels)
+        path = entry.get("path")
+        if path == "data/nrf2_epa_aeid1110.parquet":
+            table = load_epa()
+        elif path == "data/nrf2_viability_pool.parquet":
+            table = load_pool()
+        else:
+            raise ValueError(f"unknown NRF2 auxiliary dataset: {path}")
+        found = dataset.dataset_hash(table, labels=entry_labels)
         auxiliary.append(
             {
                 "name": entry.get("name"),
@@ -433,6 +466,8 @@ def build_example(n: int = 200, seed: int = 0) -> pd.DataFrame:
         .reset_index(drop=True)
     )
     dataset.write_table(subset, POOL_EXAMPLE_PATH, labels=POOL_LABELS)
+    epa = dataset.stratified_example(load_epa(), n=n, seed=seed, labels=("label",))
+    dataset.write_table(epa, EPA_EXAMPLE_PATH, labels=("label",))
     return sample
 
 
@@ -440,13 +475,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m vp_nrf2.data")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    fetch_cmd = sub.add_parser("fetch", help="rebuild the dataset from PubChem")
+    fetch_cmd = sub.add_parser("fetch", help="rebuild the Tox21 reporter and viability tables")
     fetch_cmd.add_argument(
         "--verify",
         action="store_true",
-        help="after fetching, compare the hash against the current version",
+        help="after fetching, compare the hash against the released version",
     )
     sub.add_parser("verify", help="check the on-disk table against the recorded hash")
+    epa_cmd = sub.add_parser("fetch-epa", help="rebuild the EPA ARE training table")
+    epa_cmd.add_argument("--verify", action="store_true")
     example_cmd = sub.add_parser("build-example", help="regenerate the test fixture")
     example_cmd.add_argument("--n", type=int, default=200)
 
@@ -454,6 +491,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "fetch":
         fetch()
+        if not args.verify:
+            return 0
+    if args.command == "fetch-epa":
+        from vp_nrf2 import epa
+
+        epa.fetch()
         if not args.verify:
             return 0
     if args.command == "build-example":
@@ -467,7 +510,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     print(
         f"DRIFT: {report['version']} recorded {report['declared']}\n"
-        f"       the current table hashes to {report['actual']}\n"
+        f"       the rebuilt table hashes to {report['actual']}\n"
         "The upstream source has changed. Record it as a new version rather than "
         "overwriting the released one.",
         file=sys.stderr,

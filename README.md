@@ -25,9 +25,9 @@ available with `versions()`.
 
 ## Current version
 
-**v2**, signature 1, measured under protocol `scaffold-balanced-5seed@1`. The
+**v3**, signature 1, measured under protocol `scaffold-balanced-5seed@1`. The
 full record — metrics per output and per seed, dataset hash, environment — is in
-[`src/vp_nrf2/versions/v2/CARD.md`](src/vp_nrf2/versions/v2/CARD.md).
+[`src/vp_nrf2/versions/v3/CARD.md`](src/vp_nrf2/versions/v3/CARD.md).
 
 ## Data
 
@@ -37,19 +37,21 @@ cell-viability counter-screen over the same library. Both are reduced to one row
 per compound labelled by the majority call across its assay records, retrieved
 2026-09-06 and redistributed here as a United States government work in the
 public domain. `nrf2_cytotox` also trains on five further Tox21 viability
-counter-screens, fetched and pinned the same way. Rebuild and check for
-upstream drift with `python -m vp_nrf2.data fetch --verify`; see
+counter-screens. `nrf2_are` also trains on EPA invitrodb v4.3 AEID 1110
+calls, using archived EPA structure identities; both auxiliary tables are
+training-only. Rebuild and check with `python -m vp_nrf2.data fetch --verify`
+and `python -m vp_nrf2.data fetch-epa --verify`; see
 [`data/README.md`](data/README.md) for the expected layout.
 
 ## Retrain
 
-    python -m vp_nrf2.train --version v2 --reason "why this version exists"
-    python -m vp_nrf2.evaluate --version v2
+    python -m vp_nrf2.train --version v4 --reason "why this version exists" --supersedes v3 --recipe epa-assay-token
+    python -m vp_nrf2.evaluate --version v4
 
-`train` fits one deployment model per output on the whole dataset and writes a
-new version directory; `evaluate` refits per seed under the protocol and records
-what those held-out models scored. Reproducibility is to the recorded dataset
-hash and environment, which can change.
+`train` fits five calibrated reporter members and one viability model, with a
+scaffold carve for early stopping and calibration. `evaluate` refits per seed
+under the protocol. The folds were used to choose this recipe, so the reported
+gain is exploratory. Reproducibility is to the recorded data and environment.
 
 ## Licence
 

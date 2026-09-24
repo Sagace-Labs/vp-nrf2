@@ -3,9 +3,11 @@
     data/
       nrf2_tox21.parquet                    standardised table (producing the hash)
       nrf2_viability_pool.parquet           further viability screens, training only
+      nrf2_epa_aeid1110.parquet             EPA v4.3 ARE calls, training only
       example/
         nrf2_example.parquet                small stratified fixture, used by the tests
         nrf2_viability_pool_example.parquet the same for the pool
+        nrf2_epa_example.parquet            small stratified EPA training fixture
 
 `nrf2_tox21.parquet` holds one row per compound with the two identity columns —
 `inchikey` and `smiles` (standardised) — and two label columns. `label` is the
@@ -41,6 +43,14 @@ screen made no call. It supplies extra training rows for `nrf2_cytotox` and is
 never evaluated against; the endpoint remains AID 743203's call. It carries
 its own hash in the manifest under `[[dataset.auxiliary]]`.
 
+`nrf2_epa_aeid1110.parquet` contains 1,613 EPA invitrodb v4.3 AEID
+1110 compounds absent from the primary table by connectivity identity. The
+PubChem export of 18 August 2026 supplies Active/Inactive calls; Inconclusive
+calls and unresolved structures are excluded. Structures come from EPA's
+archived 2018 chemical identity SDF. Ties and conflicting stereoisomers are
+dropped. During each fit, external rows sharing a scaffold with validation or
+test compounds are also excluded. This table is training-only.
+
 `potency_um` is the median of the potencies reported across a compound's
 reporter records and is NaN when none reported one. `n_calls` is how many assay
 records collapsed into the row and `active_frac` is the share of them that were
@@ -50,13 +60,13 @@ same of the counter-screen.
 ## Rebuilding it
 
     python -m vp_nrf2.data fetch --verify
+    python -m vp_nrf2.data fetch-epa --verify
 
 This downloads, re-parses and re-hashes, then compares against the hash the
-current version recorded. A mismatch in the hash can indicate upstream changes
+released version recorded. A mismatch in the hash can indicate upstream changes
 to the source data or the processing pipeline.
 
 ## Licence
 
-The bundled table is a United States government work in the public domain; see
-`../LICENSE-DATA`. That file covers these files only, not the package code or
-the trained weights.
+The bundled Tox21 and EPA tables carry no copyright restrictions; see
+`../LICENSE-DATA`. That file covers data only, not the code or trained weights.

@@ -1,6 +1,6 @@
 """Build a new released version.
 
-    python -m vp_nrf2.train --version v2 --reason "why this version exists"
+    python -m vp_nrf2.train --version v4 --reason "why this version exists" --recipe epa-assay-token
 
 Writes ``versions/<version>/manifest.toml`` and ``weights.joblib``.
 
@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from vp_core import fingerprints
+from vp_nrf2 import are_ensemble
 from vp_nrf2 import contract as nrf2_contract
 from vp_nrf2 import data as nrf2_data
 from vp_nrf2 import model as nrf2_model
@@ -86,12 +87,15 @@ def build_version(
     protocol: str = DEFAULT_PROTOCOL,
     supersedes: str | None = None,
     seed: int = 0,
+    recipe: str = "epa-assay-token",
 ) -> Path:
     """Fit the deployment models and write the version directory."""
     from vp_core import protocols
     from vp_core.splits import murcko_scaffold, scaffold_train_val
 
     protocols.get(protocol)  # fail early on an unknown protocol
+    if recipe not in ("standard", "epa-assay-token"):
+        raise ValueError(f"unknown NRF2 recipe: {recipe}")
 
     directory = VERSIONS_DIR / version
     if directory.exists():
@@ -110,6 +114,11 @@ def build_version(
         return matrices[kind]
 
     pool = nrf2_data.load_pool() if POOLED_OUTPUTS else None
+    source = None
+    if recipe == "epa-assay-token":
+        source = are_ensemble.source_features(
+            are_ensemble.external_only(nrf2_data.load_epa(), table)
+        )
 
     fitted = {}
     for output in nrf2_contract.column_names():
@@ -122,6 +131,14 @@ def build_version(
         # Deployment fit: everything this endpoint labels, with a small scaffold
         # carve that stops boosting before it overfits.
         train_idx, val_idx = scaffold_train_val(subset, val_frac=0.10, seed=seed)
+        if output == "nrf2_are" and source is not None:
+            fitted[output], n_extra = are_ensemble.fit_are(
+                X[rows], y, train_idx, val_idx,
+                {murcko_scaffold(subset[i]) for i in val_idx}, source,
+                seed=seed,
+            )
+            print(f"  {output}: {n_extra} EPA training rows, five members", file=sys.stderr)
+            continue
         X_train, y_train = X[rows][train_idx], y[train_idx]
 
         if output in POOLED_OUTPUTS and pool is not None:
@@ -158,6 +175,7 @@ def build_version(
             reason=reason,
             protocol=protocol,
             supersedes=supersedes,
+            recipe=recipe,
         )
     except Exception:
         shutil.rmtree(directory, ignore_errors=True)
@@ -173,6 +191,7 @@ def _write_version(
     reason: str,
     protocol: str,
     supersedes: str | None,
+    recipe: str,
 ) -> Path:
     import joblib
 
@@ -214,11 +233,16 @@ def _write_version(
             "fetch": "python -m vp_nrf2.data fetch --verify",
         },
         "model": {
-            "family": "xgboost-binary",
+            "family": "xgboost-binary-ensemble" if recipe == "epa-assay-token" else "xgboost-binary",
             "features": nrf2_model.FEATURES,
             "fit": (
-                "one model per output, each on every compound its endpoint labels "
-                "minus a 10% scaffold carve used for early stopping"
+                ("five assay-token members for nrf2_are, trained with EPA AEID 1110 "
+                 "rows excluded by primary identity and validation scaffold, "
+                 "averaged and guarded-Platt calibrated on the validation carve; "
+                 "one model for nrf2_cytotox, each using a 10% scaffold carve"
+                 if recipe == "epa-assay-token" else
+                 "one model per output, each on every compound its endpoint labels "
+                 "minus a 10% scaffold carve used for early stopping")
                 + (
                     f"; {', '.join(POOLED_OUTPUTS)} also trains on the further "
                     "viability screens, scaffold-blocked against that carve"
@@ -263,6 +287,26 @@ def _write_version(
             }
         ]
 
+    if recipe == "epa-assay-token":
+        epa_table = nrf2_data.load_epa()
+        record["dataset"]["auxiliary"].append({
+            "name": "EPA invitrodb v4.3 AEID 1110 ARE activity calls",
+            "role": "training-only",
+            "source": (
+                "EPA v4.3 PubChem export of 18 August 2026, Active/Inactive calls "
+                "paired with archived 2018 EPA chemical identities; unresolved, "
+                "inconclusive and primary connectivity identities excluded"
+            ),
+            "retrieved": "2026-09-23",
+            "licence": "public-domain",
+            "redistributable": True,
+            "path": "data/nrf2_epa_aeid1110.parquet",
+            "labels": ["label"],
+            "sha256": dataset.dataset_hash(epa_table, labels=("label",)),
+            "n_rows": len(epa_table),
+            "fetch": "python -m vp_nrf2.data fetch-epa --verify",
+        })
+
     if nrf2_model.FEATURES_BY_OUTPUT:
         record["model"]["features_by_output"] = [
             {"output": name, "kind": kind}
@@ -285,11 +329,15 @@ def _write_version(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m vp_nrf2.train")
-    parser.add_argument("--version", required=True, help="new version name, e.g. v2")
+    parser.add_argument("--version", required=True, help="new version name, e.g. v4")
     parser.add_argument("--reason", required=True, help="why this version exists")
     parser.add_argument("--protocol", default=DEFAULT_PROTOCOL)
     parser.add_argument("--supersedes", default=None)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--recipe", choices=("standard", "epa-assay-token"),
+        default="epa-assay-token",
+    )
     args = parser.parse_args(argv)
 
     build_version(
@@ -298,6 +346,7 @@ def main(argv: list[str] | None = None) -> int:
         protocol=args.protocol,
         supersedes=args.supersedes,
         seed=args.seed,
+        recipe=args.recipe,
     )
     return 0
 
